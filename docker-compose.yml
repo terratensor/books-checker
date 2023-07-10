@@ -1,0 +1,37 @@
+version: '3.5'
+
+services:
+  manticore:
+    image: manticoresearch/manticore
+    ports:
+      - "127.0.0.1:9306:9306"
+      - "127.0.0.1:9308:9308"
+      - "127.0.0.1:9312:9312"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - manticore:/var/lib/manticore
+      - manticore:/var/log/manticore
+      - ./docker/manticore/manticore.conf:/etc/manticoresearch/manticore.conf
+      - ./data/:/data
+
+  postgres:
+    image: postgres:15.1-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: minjust-list
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    ports:
+      - "54324:5432"
+
+volumes:
+  postgres:
+  manticore:
