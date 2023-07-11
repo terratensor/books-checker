@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/avast/retry-go"
@@ -33,7 +34,8 @@ func checkError(message string, err error) {
 	}
 }
 
-var ParseMode bool
+var ParseMode,
+	showConsole bool
 var outputPath,
 	matchMode,
 	columns string
@@ -44,11 +46,24 @@ func main() {
 	flag.StringVarP(&outputPath, "file", "f", "./list.csv", "csv файл с наименованиями книг для проверки")
 	flag.StringVarP(&matchMode, "matchMode", "m", "query_string", "режим поиска, query_string, match_phrase, match")
 	flag.StringVarP(&columns, "columns", "c", "all", "колонки csv (author, title), которые будут соединены в строку запроса")
+	flag.BoolVarP(&showConsole, "showConsole", "s", false, "вывод результатов в консоль без сохранения в файл")
 	flag.Parse()
 
 	if ParseMode {
 		parseMode()
 		return
+	}
+
+	if !showConsole {
+		currentTime := time.Now()
+		filename := fmt.Sprintf("./%v_result_log.txt", currentTime.Format("15-04-05_02012006"))
+		f, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.Fatalf("error opening file: %v", err)
+		}
+		defer f.Close()
+
+		log.SetOutput(f)
 	}
 
 	// Читаем файл со списком книг
@@ -63,7 +78,6 @@ func main() {
 	}
 
 	for n, item := range records {
-		log.Printf("Строка: %v\r\n", item)
 		if n == 0 {
 			continue
 		}
@@ -95,15 +109,19 @@ func main() {
 			currentMatchMode = MatchAll
 		}
 
-		log.Printf("Запрос(%v): %v", matchMode, query)
 		search := NewSearch(query, "minjust_list")
-
+		search.LogMessage = fmt.Sprintf("Строка: %v\r\nЗапрос(%v): %v", item, matchMode, query)
 		search.MatchMode = currentMatchMode
+
 		manticoreHttpJson(search)
 	}
 }
 
 func manticoreHttpJson(search Search) {
+
+	if search.Query == "" {
+		return
+	}
 
 	var query string
 	switch search.MatchMode {
@@ -117,16 +135,36 @@ func manticoreHttpJson(search Search) {
 	var jsonData = []byte(fmt.Sprintf(`{
 		"index": "%v",
 		%v
-		"highlight": {"limit": 500}
+		"highlight": {"limit": 0}
 	}`, search.Index, query))
 
-	resp, err := http.Post("http://localhost:9312/search", "application/json", bytes.NewBuffer(jsonData))
+	resp, err := http.Post("http://localhost:9308/search", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		fmt.Errorf("%v", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	log.Println("Результат: ", string(body))
+	//body, err := io.ReadAll(resp.Body)
+
+	var searchResult SearchResult
+	err = json.NewDecoder(resp.Body).Decode(&searchResult)
+	if err != nil {
+		panic(err)
+	}
+	if searchResult.Hits.Total > 0 {
+
+		var b strings.Builder
+		fmt.Fprintf(&b, "%v", search.LogMessage)
+
+		for n, hit := range searchResult.Hits.Hits {
+			for _, item := range hit.Highlight.Name {
+				fmt.Fprintf(&b, "%d. %v\r\n", n+1, item)
+			}
+		}
+
+		log.Println(b.String())
+	}
+
+	//log.Printf("Результат: %v\r\n\r\n", string(body))
 }
 
 func readCsvFile(filePath string) [][]string {
