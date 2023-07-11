@@ -54,9 +54,10 @@ func main() {
 		return
 	}
 
+	var filename string
 	if !showConsole {
 		currentTime := time.Now()
-		filename := fmt.Sprintf("./%v_result_log.txt", currentTime.Format("15-04-05_02012006"))
+		filename = fmt.Sprintf("./%v_result_log.txt", currentTime.Format("15-04-05_02012006"))
 		f, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 		if err != nil {
 			log.Fatalf("error opening file: %v", err)
@@ -115,6 +116,12 @@ func main() {
 
 		manticoreHttpJson(search)
 	}
+
+	if filename != "" {
+		fmt.Printf("Обработка завершена. Создан файл: %v\r\n", filename)
+	} else {
+		fmt.Println("Обработка завершена")
+	}
 }
 
 func manticoreHttpJson(search Search) {
@@ -163,7 +170,6 @@ func manticoreHttpJson(search Search) {
 
 		log.Println(b.String())
 	}
-
 	//log.Printf("Результат: %v\r\n\r\n", string(body))
 }
 
