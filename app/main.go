@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/avast/retry-go"
+	"github.com/manticoresoftware/go-sdk/manticore"
 	flag "github.com/spf13/pflag"
 	"golang.org/x/net/html"
 	"io"
@@ -33,17 +34,113 @@ func checkError(message string, err error) {
 }
 
 var ParseMode bool
-var outputPath string
+var outputPath,
+	matchMode,
+	columns string
 
 func main() {
 
 	flag.BoolVarP(&ParseMode, "parse", "p", false, "Парсинг страниц с наименованиями книг в файл csv")
-	flag.StringVarP(&outputPath, "output", "o", "./parsed-files", "путь сохранения файлов")
+	flag.StringVarP(&outputPath, "file", "f", "./list.csv", "csv файл с наименованиями книг для проверки")
+	flag.StringVarP(&matchMode, "matchMode", "m", "query_string", "режим поиска, query_string, match_phrase, match")
+	flag.StringVarP(&columns, "columns", "c", "all", "колонки csv (author, title), которые будут соединены в строку запроса")
+	flag.Parse()
 
 	if ParseMode {
 		parseMode()
+		return
 	}
 
+	// Читаем файл со списком книг
+	records := readCsvFile(outputPath)
+
+	// Создаем клиент Manticore
+	cl := manticore.NewClient()
+	cl.SetServer("localhost", 9308)
+	_, err := cl.Open()
+	if err != nil {
+		fmt.Printf("Conn: %v", err)
+	}
+
+	for n, item := range records {
+		log.Printf("Строка: %v\r\n", item)
+		if n == 0 {
+			continue
+		}
+
+		var b strings.Builder
+
+		if columns == "author" {
+			fmt.Fprintf(&b, "%v ", item[0])
+		}
+		if columns == "title" {
+			fmt.Fprintf(&b, "%v ", item[1])
+		}
+		if columns != "author" && columns != "title" {
+			fmt.Fprintf(&b, "%v ", item[0])
+			b.WriteString(item[1])
+		}
+		query := fmt.Sprintln(b.String())
+
+		var currentMatchMode EMatchMode
+
+		switch matchMode {
+		case "query_string":
+			currentMatchMode = MatchAll
+		case "match_phrase":
+			currentMatchMode = MatchPhrase
+		case "match":
+			currentMatchMode = MatchAny
+		default:
+			currentMatchMode = MatchAll
+		}
+
+		log.Printf("Запрос(%v): %v", matchMode, query)
+		search := NewSearch(query, "minjust_list")
+
+		search.MatchMode = currentMatchMode
+		manticoreHttpJson(search)
+	}
+}
+
+func manticoreHttpJson(search Search) {
+
+	var query string
+	switch search.MatchMode {
+	case MatchAll:
+		query = fmt.Sprintf("\"query\": {  \"query_string\": \"%v\" },", search.Query)
+	case MatchPhrase:
+		query = fmt.Sprintf("\"query\": {  \"match_phrase\": {\"*\": \"%v\"} },", search.Query)
+	case MatchAny:
+		query = fmt.Sprintf("\"query\": {  \"match\": {\"*\": \"%v\"} },", search.Query)
+	}
+	var jsonData = []byte(fmt.Sprintf(`{
+		"index": "%v",
+		%v
+		"highlight": {"limit": 500}
+	}`, search.Index, query))
+
+	resp, err := http.Post("http://localhost:9312/search", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		fmt.Errorf("%v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	log.Println("Результат: ", string(body))
+}
+
+func readCsvFile(filePath string) [][]string {
+	f, err := os.Open(filePath)
+	if err != nil {
+		log.Fatal("Unable to read input file "+filePath, err)
+	}
+	defer f.Close()
+	csvReader := csv.NewReader(f)
+	records, err := csvReader.ReadAll()
+	if err != nil {
+		log.Fatal("Unable to parse file as CSV for "+filePath, err)
+	}
+	return records
 }
 
 func parseMode() {
